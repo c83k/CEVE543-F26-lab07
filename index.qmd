@@ -388,8 +388,19 @@ end
 **Your answer:** How much do the trends differ between stations a few miles apart?
 Is that more likely a real difference in climate or noise from short records, and what in the table supports your answer?
 
+The trends differ a lot.
+Scholes Field (+3%) and Galveston (−15%) are only 4.5 miles apart but differ by 18 percentage points, and across the 20 stations the trends run from −22% (Freeport 2 NW) to +89% (Houston Heights).
+This is almost certainly noise, not climate.
+The climate cannot change that sharply over a few miles, and the signs of the trends flip back and forth between neighbors with no spatial pattern: Hobby Airport is +24% while Deer Park, a similar distance away, is −7%.
+The table also shows that many records are short (21 to 31 years at Scholes Field and the stream gauges), and one large storm early or late in a short record is enough to swing a fitted trend by tens of percent.
+
 **Your answer:** How much does $x_t$ change over Scholes Field's 21 years, compared with a record that starts around 1900?
 So what sets Scholes Field's trend when you fit it alone?
+
+From the CO2 file, $x_t$ rises from 0.38 in 1997 to 0.54 in 2017, a change of only 0.16 doublings.
+A record that starts in 1900 ($x = 0.08$) spans 0.46 doublings, almost three times as much.
+Over 21 years $x_t$ also rises almost linearly in time, so the model cannot tell a CO2 effect apart from any other slow change or from chance.
+When Scholes Field is fit alone, its trend is set mainly by which storms happen to fall early or late in its short record, such as Ike in 2008 and Harvey in 2017, not by CO2.
 
 
 ## Borrowing from neighbors
@@ -485,8 +496,16 @@ The weighted likelihood treats every station's value as independent.
 Which method keeps the 2017 values together, and which interval would you expect to be wider?
 
 ```{julia}
-# Your code here
+#| solution: false
+storm_2017 = ann_max_region[ann_max_region.year .== 2017,
+                            [:name, :miles, :date, :prcp_in]]
+sort!(storm_2017, :miles)
 ```
+
+17 of the 20 kept stations have a 2017 annual maximum, and every one of them fell between August 26 and August 29, 2017: Hurricane Harvey.
+They are one storm, not 17 independent events, but the weighted likelihood, and so MCMC, counts them as 17 independent pieces of evidence and is overconfident.
+The bootstrap over years keeps the 2017 values together, because each resample takes or leaves the whole year, with every station's value from it.
+So I expect the bootstrap interval to be wider, and it is: 12.2 to 20.6 inches (8.4 inches wide), against 13.5 to 20.2 inches (6.7 inches wide) for MCMC.
 
 
 ## Your analysis
@@ -499,6 +518,30 @@ Then code one of the other weight functions and run it the same way.
 **Your answer:** Make a table with one row per weight function you tried, giving the number of stations kept, $n_\text{eff}$, the pooled trend, and the 2026 100-year level with its bootstrap interval.
 Which settings give an estimate dominated by variance, and which by bias?
 Name a physical reason a wide region could be biased for a station on Galveston Island.
+
+I reran the notebook from the weight function down for each setting below, with 500 bootstrap resamples each.
+The rendered notebook uses the linear weight with $r = 50$.
+"Flat" is the region of influence, and the exponential kernel is cut off at 100 miles so that it does not keep every station in Texas.
+
+| Weight | Stations kept | $n_\text{eff}$ | Pooled trend, 1950 to 2026 | 2026 100-year level (in) | Bootstrap 95% interval (in) |
+|---|---|---|---|---|---|
+| Linear, 25 mi | 4 | 1.9 | −4% | 13.7 | 10.5 to 18.2 |
+| Linear, 50 mi | 20 | 6.1 | +10% | 16.2 | 12.2 to 20.6 |
+| Linear, 100 mi | 69 | 27.0 | +23% | 17.4 | 13.5 to 22.8 |
+| Flat, 50 mi | 20 | 20.0 | +18% | 17.6 | 13.0 to 22.3 |
+| Exp., L = 20 mi | 69 | 6.4 | +13% | 16.4 | 12.9 to 21.0 |
+
+The linear weight with $r = 25$ miles is dominated by variance.
+It keeps only Scholes Field, Galveston, Alvin, and Clear Creek, with $n_\text{eff} = 1.9$; its trend of −4% mostly reflects Galveston's long record and the noise in Scholes Field's own; and its interval reaches down to 10.5 inches.
+The linear weight with $r = 100$ miles and the region of influence with $r = 50$ miles are dominated by bias.
+They give distant stations much more weight ($n_\text{eff}$ of 27 and 20), and both the trend (+18% to +23%) and the level (17.4 to 17.6 inches) drift up toward the inland Houston stations.
+Their intervals are no narrower than the $r = 50$ linear weight's, because the extra stations share the same storms and so add little independent information, while the center moves.
+The linear weight with $r = 50$ and the exponential kernel sit in between and agree closely (16.2 and 16.4 inches).
+
+A physical reason for bias: Galveston is a barrier island surrounded by the Gulf.
+Inland Houston gets heavier extreme rainfall from storms that stall over land and from convection that the city and the land heat up, while the island is under marine air with sea-breeze effects.
+The table of single-station fits shows this: Galveston's 100-year level is about 12 inches, while Houston-Port, Cedar Bayou, and Greens Bayou are 27 to 35 inches.
+Many of the inland gauges are also 30-year flood-control stream gauges whose records are dominated by Tropical Storm Allison (2001) and Harvey (2017).
 
 
 ### Share only the trend and shape
@@ -557,13 +600,71 @@ end
 1. `station[i]` is the row of `stations`, from 1 to `n_stations`, that `y[i]` came from.
 1. Scholes Field's row of `stations`.
 
+To get an interval for the shared-trend fit, we refit it to the same bootstrap over years.
+
+```{julia}
+#| solution: false
+function shared_trend_fit(rows)
+    y = rows.prcp_in
+    station = [findfirst(==(id), stations.id) for id in rows.id]
+    start = InitFromParams((μ0=fill(median(y), n_stations),
+                            κ=fill(std(y) / median(y), n_stations), β=0.0, ξ=0.1))
+    fit = maximum_a_posteriori(weighted_shared_trend(y, rows.x, station, rows.w,
+                                                     n_stations);
+                               initial_params=start)
+    (; μ0, κ, β, ξ) = NamedTuple(fit.params)
+    return (μ0=μ0[k], κ=κ[k], β=β, ξ=ξ)
+end
+
+shared_bootstrap_fits = map(1:500) do _
+    picked = rand(years, length(years))
+    rows = reduce(vcat, [ann_max_region[ann_max_region.year .== yr, :]
+                         for yr in picked])
+    return shared_trend_fit(rows)
+end
+levels = level_2026.(shared_bootstrap_fits)
+trends = trend_percent.(shared_bootstrap_fits)
+@printf("trend and shape shared, bootstrap 95%% interval: 2026 100-year level %.1f to %.1f inches, trend %+.0f%% to %+.0f%%\n",
+        quantile(levels, 0.025), quantile(levels, 0.975),
+        quantile(trends, 0.025), quantile(trends, 0.975))
+```
+
 **Your answer:** Which parameters should be shared for Scholes Field, and why?
+
+Share only the trend $\beta$ and the shape $\xi$, and give each station its own $\mu_0$ and $\kappa$.
+The trend and the shape are what 21 years cannot pin down: the trend because $x_t$ barely changes over the record, and the shape because it is set by the few largest values.
+Both are also plausibly regional, since every station here sees the same Gulf moisture and the same tropical storms, and a warming climate should change them in a similar way.
+The location and scale, the typical size and spread of storms at a gauge, clearly are not the same everywhere: Galveston's 100-year level is about 12 inches, and some inland gauges are near 30.
+Sharing those pulls Scholes Field toward inland Houston.
+
+Sharing everything also inflates the trend.
+With all parameters shared the trend is +10%; with only trend and shape shared it falls to +3%.
+The short-record inland stream gauges are wetter than the coast and exist only in recent, high-CO2 years, so when they must share Scholes Field's $\mu_0$, the model can explain their larger values only as a CO2 trend.
+Giving each station its own $\mu_0$ removes that confounding.
 
 
 ### Defend a choice
 
 **Your answer:** What is your estimate of the 100-year daily rainfall at Galveston Scholes Field in 2026, with an interval?
 Say which weight function and radius you chose, which parameters you shared, and which interval you report, and defend each choice.
+
+My estimate of the 2026 100-year daily rainfall at Galveston Scholes Field is **16.2 inches, with a 95% interval of about 10.5 to 23.1 inches** (the bootstrap interval for the shared-trend fit, printed above).
+
+- **Weight function: linear, with $r = 50$ miles.**
+  It keeps 20 stations with $n_\text{eff} = 6.1$, about six stations' worth of data rather than one.
+  Nearby coastal stations such as Galveston (4.5 miles, 137 years) count almost fully, and the inland Houston stations count little.
+  A 25-mile radius leaves too little data, and a 100-mile radius or a flat region of influence lets inland stations pull the estimate upward.
+  The exponential kernel, which weights stations in a similar way, gives nearly the same answer (16.4 inches), so the result is not sensitive to that choice.
+- **Shared parameters: trend and shape only.**
+  The location and scale differ between the island and inland Houston, while the trend and shape cannot be estimated from 21 years and plausibly are the same across the region.
+  Keeping the location local also removes the false trend that comes from wetter short-record inland gauges.
+- **Interval: the bootstrap over years.**
+  Harvey hit 17 of the 20 stations in the same few days of 2017, so the stations' values in a year are not independent.
+  The weighted likelihood that MCMC samples counts each as independent evidence and gives an interval that is too narrow.
+  The bootstrap resamples whole years, so it keeps such a storm together.
+
+The interval is wide, about a factor of two from end to end.
+That is honest: it combines a 21-year record, a tail shape that is hard to estimate, and a CO2 trend whose sign (−9% to +18% from 1950 to 2026) the data do not settle.
 
 ## Turning it in
 
